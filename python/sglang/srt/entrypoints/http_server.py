@@ -2336,43 +2336,42 @@ def _start_native_grpc_server_for_runtime(
     template_manager,
     scheduler_info,
 ):
-    """Attempt to start the native Rust gRPC server for a live runtime.
+    """Start the native Rust gRPC server for a live runtime.
 
-    Returns a GrpcServerHandle on success, or None if the native gRPC
-    extension is not present in this wheel.
+    Returns a GrpcServerHandle. Raises on any failure (missing extension,
+    port bind error, runtime error) — the caller asked for --enable-grpc
+    explicitly, so silently leaving HTTP healthy with gRPC missing would
+    surprise the operator.
     """
     try:
         from sglang.srt.entrypoints.grpc_bridge import RuntimeHandle
         from sglang.srt.grpc import _core as grpc_native
+    except ImportError as e:
+        raise RuntimeError(
+            "Native gRPC extension (sglang.srt.grpc._core) not found in this wheel, "
+            "but --enable-grpc was set. The extension is built from rust/sglang-grpc/ "
+            "via setuptools-rust during wheel build. Either install a wheel that "
+            "includes the extension or drop --enable-grpc."
+        ) from e
 
-        runtime_handle = RuntimeHandle(
-            tokenizer_manager=tokenizer_manager,
-            template_manager=template_manager,
-            server_args=server_args,
-            scheduler_info=scheduler_info or {},
-        )
+    runtime_handle = RuntimeHandle(
+        tokenizer_manager=tokenizer_manager,
+        template_manager=template_manager,
+        server_args=server_args,
+        scheduler_info=scheduler_info or {},
+    )
 
-        grpc_handle = grpc_native.start_server(
-            host=server_args.host,
-            port=server_args.grpc_port,
-            runtime_handle=runtime_handle,
-            worker_threads=server_args.grpc_worker_threads,
-            max_prefill_tokens=server_args.grpc_max_prefill_tokens,
-        )
-        logger.info(
-            f"Native gRPC server started on {server_args.host}:{server_args.grpc_port}"
-        )
-        return grpc_handle
-    except ImportError:
-        logger.info(
-            "Native gRPC extension (sglang.srt.grpc._core) not found in this wheel; "
-            "native gRPC server disabled. The extension is built from rust/sglang-grpc/ "
-            "via setuptools-rust during wheel build."
-        )
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to start native gRPC server: {e}")
-        return None
+    grpc_handle = grpc_native.start_server(
+        host=server_args.host,
+        port=server_args.grpc_port,
+        runtime_handle=runtime_handle,
+        worker_threads=server_args.grpc_worker_threads,
+        max_prefill_tokens=server_args.grpc_max_prefill_tokens,
+    )
+    logger.info(
+        f"Native gRPC server started on {server_args.host}:{server_args.grpc_port}"
+    )
+    return grpc_handle
 
 
 def _shutdown_native_grpc_server(grpc_handle) -> None:

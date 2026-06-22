@@ -1077,6 +1077,13 @@ class ServerArgs:
                     "Multi-worker HTTP/2 support will be added in a future release."
                 )
 
+        # SGLANG_ENABLE_GRPC=1 enrollment must be picked up before this guard,
+        # otherwise the env-only path bypasses the multi-tokenizer check (and
+        # the later checks in _handle_deprecated_args). Mirror the same merge
+        # logic; _handle_deprecated_args is idempotent on these fields.
+        if not self.enable_grpc and envs.SGLANG_ENABLE_GRPC.get():
+            self.enable_grpc = True
+
         legacy_grpc_requested = self.smg_grpc or self.grpc_mode
         native_grpc_requested = (
             self.enable_grpc
@@ -1089,6 +1096,15 @@ class ServerArgs:
             raise ValueError(
                 "Native gRPC does not yet support --tokenizer-worker-num > 1. "
                 "Unset --enable-grpc or set --tokenizer-worker-num 1."
+            )
+        # api_key middleware is a FastAPI add-on; the native gRPC listener
+        # bypasses it. Reject the combination until the Rust side gains an
+        # auth interceptor.
+        if native_grpc_requested and (self.api_key or self.admin_api_key):
+            raise ValueError(
+                "--enable-grpc is incompatible with --api-key/--admin-api-key: "
+                "the native gRPC listener bypasses HTTP auth middleware. "
+                "Unset --enable-grpc or remove the api-key flags."
             )
 
     def _handle_multimodal(self):
@@ -1158,14 +1174,20 @@ class ServerArgs:
         if self.grpc_port is None and grpc_port_env is not None:
             self.grpc_port = grpc_port_env
 
-        if self.grpc_port is None:
-            self.grpc_port = self.port + 10000
-        if not (1 <= self.grpc_port <= 65535):
-            raise ValueError(
-                f"--grpc-port / SGLANG_GRPC_PORT ({self.grpc_port}) must be between 1 and 65535"
-            )
-        if self.grpc_worker_threads < 1:
-            raise ValueError("--grpc-worker-threads must be >= 1")
+        # Only derive a default grpc_port (and validate it) when gRPC is
+        # actually in use. HTTP-only launches on high ports (e.g. --port 56000)
+        # would otherwise fail validation because port+10000 falls outside
+        # the valid range — even though nothing will ever listen on it.
+        grpc_in_use = self.enable_grpc or self.smg_grpc or self.grpc_mode
+        if grpc_in_use:
+            if self.grpc_port is None:
+                self.grpc_port = self.port + 10000
+            if not (1 <= self.grpc_port <= 65535):
+                raise ValueError(
+                    f"--grpc-port / SGLANG_GRPC_PORT ({self.grpc_port}) must be between 1 and 65535"
+                )
+            if self.grpc_worker_threads < 1:
+                raise ValueError("--grpc-worker-threads must be >= 1")
 
     def _handle_prefill_delayer_env_compat(self):
         if envs.SGLANG_SCHEDULER_DECREASE_PREFILL_IDLE.get():
